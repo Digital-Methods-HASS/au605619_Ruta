@@ -1,0 +1,250 @@
+---
+title: 'W8: Practicing web scraping'
+author: "Ruta Slivkaite"
+date: "10/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libraries}
+
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(janitor)
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(ggplot2)
+
+```
+
+
+## Web Scraping Job Postings
+
+In this assignment I have decided to web scrape job postings from EURAXESS Portal.
+
+EURAXESS lists thousands of research vacancies and fellowships from more than 40 European countries and other regions in the world. Backed by the European Union, member states and associated countries, it supports researcher mobility and career development, while enhancing scientific collaboration between Europe and the world.
+
+I have used their job search page with "cognitive science" as a keywords (link: https://euraxess.ec.europa.eu/jobs/search?keywords=cognitive%20science). I didn´t specify any research field, therefore I got 148 search results spanning different fields such as Neuroscience, Medical sciences, Psychological sciences, Computer science <...> and Cognitive science itself. The jobs´ titles don´t neccessarily involve words "cognitive science", therefore it is not readily apparent why these search results were presented.
+
+To investigate the search results, I have created a function to scrape the page for these elements of interest: jobs´ titles, research fields, location/country of the job, company/institute offering the job.
+
+Later on, I have cleaned up the dataset to some extent and visualized the data (focused only on the titles and countries due to the time limit). 
+Main questions I tried to answer were:
+1) what are the most popular words appearing in the tiltles of the jobs?
+2) which countries are offering most of the jobs on this website?
+
+
+
+
+```{r webscraping code}
+
+  #### START OF WEBSCRAPING CODE ####
+
+
+## function to scrape the jobs site for different page numbers
+page_scrape <- function(page_number) {
+    # parsing an url into xml document + allowing to update the page number
+  url <- paste0("https://euraxess.ec.europa.eu/jobs/search?keywords=cognitive%20science&page=", page_number)
+  jobs <- read_html(url)
+  
+    # scraping elements of interest (nodes) from the site and saving it into separate dataframes
+  titles <- jobs %>% 
+ 			html_nodes("#block-system-main .col-sm-12 a") %>%
+ 			html_text() %>% 
+	    as.data.frame()
+  names(titles) <- "Title"    #renaming the column
+  
+  research_field <- jobs %>% 
+      html_nodes("li:nth-child(2) .value") %>% 
+      html_text() %>% 
+      as.data.frame()
+  names(research_field) <- "Research field"
+  
+  location <- jobs %>%
+      html_nodes("li:nth-child(3) .value") %>% 
+      html_text() %>% 
+      as.data.frame()
+  names(location) <- "Location"
+  
+  company_institute <- jobs %>% 
+      html_nodes("li:nth-child(4) .value") %>% 
+      html_text() %>% 
+      as.data.frame()
+  names(company_institute) <- "Company/Institute"
+  
+    #binding dataframes by column
+  jobs <- cbind(titles, research_field, location, company_institute) 
+     
+}
+
+
+
+## looping through page numbers of the website
+
+page_numbers <- data_frame(page_numbers = seq(1:15))
+
+jobs <- page_numbers %>%
+  group_by(page_numbers) %>%
+  do(page_scrape(.$page_numbers))
+
+# getting rid of page number column
+jobs <- jobs %>%
+  ungroup() %>%
+  select(-page_numbers)
+
+
+head(jobs)
+
+
+
+```
+
+
+## cleaning up the dataset
+
+```{r data clean up}
+
+
+### Cleaning the title column
+
+## extract the words from the Title column into separate rows and count their frequency
+i <- data.frame(table(unlist(strsplit(tolower(jobs$Title), " "))))
+
+## renaming the column in order to use it for the removal of the stop words
+names(i)[1] <- "word"
+
+## getting rid of digits in the column
+i <-i[-grep("\\b\\d+\\b", i$word),]
+
+## getting rid of punctuation symbols
+i$word <- gsub("[[:punct:]]", "", i$word)
+
+
+## getting the stop words list
+library(stopwords)
+all_stops <- c(stopwords("en"))
+
+## removing the stopwords from the column
+i <- i %>% anti_join(stop_words, by="word")
+
+## removing blank cells from the column
+i <- i %>%
+  na_if("") %>%    # recoding empty strings "" by NAs
+  na.omit          # removing NAs
+
+
+## arranging words in the descending order by their appearance frequency
+i %>% group_by(word) %>% count()
+i <- i %>% arrange(desc(i$Freq))
+
+## deleting generic words (only among more frequent ones - later used in the plot), which are not stop words, however not very informative about the job title
+i <- i[!grepl("position|candidate|franquès|martí|call|mscacofund|dp|role|nuig|ref", i$word),]
+
+
+
+## modifying the words that were spelled differently, but mean the same
+i <- i %>%
+  mutate(word = case_when(
+    str_detect(word, "postdoc")  ~ "postdoctoral",
+    str_detect(word, "doctoral") ~ "postdoctoral",
+    str_detect(word, "fellow") ~ "fellowship",
+    str_detect(word, "doc") ~ "postdoctoral",
+    TRUE ~ word
+    )
+  )
+    
+
+## summing the frequencies of word duplicates in the dataset (e.g. there are 4 duplicate rows for word "postdoctoral")
+i <-  i %>% 
+     group_by(word) %>% 
+     summarise_all(funs(sum))
+i <- i %>% arrange(desc(i$Freq))
+
+## deleting the 6th row with word "pos" (I had troubles deleting it with grepl function, since it deletes all words starting with pos)
+i <- i[-c(6), ] 
+
+
+head(i)
+
+
+
+
+```
+
+## data visualization
+
+
+```{r data visualization}
+
+
+### Plotting
+
+# Frequent words in Cognitive Science job titles
+
+i %>% 
+  filter(i$Freq > 4) %>% 
+  mutate(word = reorder(word, Freq, FUN = sum)) %>% 
+  ggplot(aes(x=word, y=Freq)) +
+  geom_col(width = .8) +
+  geom_text(aes(label = Freq), hjust = 1.2, colour = "white", fontface = "bold") +
+  coord_flip() +
+  labs(x = "Word \n", y = "\n Count ", title = "Frequent words in Cognitive Science job titles \n") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12))
+  
+
+
+# Most hiring countries
+
+
+location <- jobs %>% group_by(Location) %>% summarise(length(Location))
+location <- location %>% arrange(desc(`length(Location)`))
+names(location)[2] <-"count"
+
+
+location %>% 
+  mutate(Location = reorder(Location, count)) %>% 
+  ggplot(aes(Location, count)) +
+  geom_col(width = .8) +
+  geom_text(aes(label = count), hjust = 1.2, colour = "white", fontface = "bold") +
+  coord_flip() +
+  labs(x = "Location \n", y = "\n Count ", title = "Most hiring countries \n") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12))
+
+
+
+# Less frequent, yet congitive science related words among job titles
+
+i %>% filter(word == "data"| word =="cognition"|word== "machine"|word=="brain"|word=="computer") %>%
+  mutate(word = reorder(word, Freq)) %>% 
+  ggplot(aes(word, Freq)) +
+  geom_col(width = .8) +
+  geom_text(aes(label = Freq), hjust = 1.2, colour = "white", fontface = "bold") +
+  coord_flip() +
+  labs(x = "word \n", y = "\n count ", title = "Less frequent cognitive science related words \n") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12))
+
+
+
+
+```
+
+
+The plots have revealed that most frequent word in jobs´ titles was postdoctoral with 51 appearances, phd was the 2nd most frequent word with 41 appearances.The most hiring country is Spain with 30 job post.
+
+I have visualized the appearance of cognitive science related words, that were less frequent among these search results: brain with 5, machine with 4, data with 3, computer with 2 and cognition with 1 appearance.
+
+
+
