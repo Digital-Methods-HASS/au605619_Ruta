@@ -2,7 +2,6 @@
 Homework assignments for Cultural Data science
 
 Homework no.4: Start with R
-Introduction to R
 
 Homework no.5: Visualize global development - Make It Move!
 Introduction to gganimate
